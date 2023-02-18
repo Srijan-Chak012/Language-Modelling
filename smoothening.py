@@ -1,3 +1,6 @@
+import math
+from tokeniser import tokeniser
+
 # Create a corpus of words
 def create_ngrams(corpus, n):
     ngrams = {}
@@ -7,24 +10,28 @@ def create_ngrams(corpus, n):
             ngrams[ngram] += 1
         else:
             ngrams[ngram] = 1
+        # print(ngram)
     return ngrams
 
-text = ["My", "name", "is", "srijan"]
+def clean_text(text):
+    # if unigram probability is less than or equal to one, replace the word in original text with <UNK>
+    for word in text:
+        if all_ngrams[0].get((word,), 0) <= 1:
+            text[text.index(word)] = "<UNK>"
 
-unigram = create_ngrams(text, 1)
-bigram = create_ngrams(text, 2)
-trigram = create_ngrams(text, 3)
-fourgram = create_ngrams(text, 4)
+    return text
 
-all_ngrams = [unigram, bigram, trigram, fourgram]
+def initialise_ngram(text):
+    unigram = create_ngrams(text, 1)
+    bigram = create_ngrams(text, 2)
+    trigram = create_ngrams(text, 3)
+    fourgram = create_ngrams(text, 4)
 
-print(all_ngrams)
+    all_ngrams = [unigram, bigram, trigram, fourgram]
 
-# Get unique ngrams
+all_ngrams = initialise_ngram(pride_words)
 
-def get_unique_ngrams(ngrams):
-    unique_ngrams = set(ngrams.keys())
-    return unique_ngrams
+# print(all_ngrams)
 
 def backoff(ngrams, n):
     if n == 2:
@@ -52,27 +59,138 @@ def backoff(ngrams, n):
         else:
             return all_ngrams[n-1][ngrams]
 
-def kneser_ney_smoothing(ngrams, n, d=0.75):
-    smoothed_ngrams = {}
-    for ngram in ngrams:
-        if n == 2:
-            word = ngram[-1]
-            count = 0
-            for x, y in all_ngrams[1].items():
-                if y == word:
-                    count += 1
-            denom = len(all_ngrams[1])
-        else:
-            denom_seq = ngram[:-1]
-            denom = all_ngrams[n-2].get(denom_seq, 0)
-        
-        first_term = max(ngrams[ngram] - d, 0)
-        second_term = d * sum(kneser_ney_smoothing(history, n-1).get(history[:-1], 0) for history in ngrams if history[1:] == ngram[:-1])
-        smoothed_prob = (first_term + second_term) / denom
-        smoothed_ngrams[ngram] = smoothed_prob
-    return smoothed_ngrams
+def kneser_ney_smoothing(sequence, n, d=0.75):
+    if n == 2:
+        context = sequence[0]
+        word = sequence[1]
+        first_denom = 0
+        # print(context, word)
+        count = 0
+        for x, y in all_ngrams[1].keys():
+            if x == context:
+                first_denom += 1
+            if y == word:
+                count += 1
+        denom = len(all_ngrams[1])
+        # print(sequence[0])
+        if first_denom == 0:
+            return 0
+        # print("first denom ", first_denom)
+        # print(all_ngrams[n-1].get(sequence, 0))
+        seq = (sequence[:-1])
+        first_denom = max(all_ngrams[n-2].get(seq, 0) - d, 0)
+        first_term = max(all_ngrams[n-1].get(sequence, 0) - d, 0)/first_denom
+        # print("first ", first_term, sequence)
+        second_term = d * count / denom
+        # print("second ", second_term, sequence)
+        smoothed_prob = (first_term + second_term)
+        return smoothed_prob
+    else:
+        denom_seq = sequence[:-1]
+        denom = all_ngrams[n-2].get(denom_seq, 0)
+        # print(denom)
+        if denom == 0:
+            return 0
+        # print(all_ngrams[n-1].get(sequence, 0))
+        first_term = max(all_ngrams[n-1].get(sequence, 0) - d, 0)/denom
+        # print("first ", first_term, sequence)
 
-sequence = ("My", "name", "is", "Darcy")
-smoothed_ngrams = kneser_ney_smoothing(all_ngrams[3], 4)
-print(smoothed_ngrams.get(sequence, 0))
+        # get unique continuations of n-1 grams
+        unique_continuations = set()
+        for x in all_ngrams[n-1].keys():
+            if x[:-1] == denom_seq:
+                unique_continuations.add(x[-1])
+        second_term_count = len(unique_continuations)
+        second_term = d * second_term_count * kneser_ney_smoothing(sequence[1:], n-1) / denom
+        # print("second ", second_term, sequence)
+        smoothed_prob = (first_term + second_term)
+        return smoothed_prob
 
+# sequence = ["between", "him", "and", "darcy"]
+# sequence = clean_text(sequence)
+# sequence = tuple(sequence)
+# print(sequence)
+# prob = kneser_ney_smoothing(sequence, 4)
+# print(prob)
+
+def witten_bell_smoothing(sequence, n):
+    if n == 1:
+        all_words = sum(all_ngrams[0].values())
+        count = all_ngrams[0].get(sequence, 0)/all_words
+        return count
+    history = sequence[:-1]
+    count_history = all_ngrams[n-2].get(history, 0)
+    if count_history == 0:
+        return 0
+    count_term = all_ngrams[n-1].get(sequence, 0)
+    p_ml = count_term/count_history
+
+    # get unique continuations of n-1 grams
+    unique_continuations = set()
+    for x in all_ngrams[n-1].keys():
+        if x[:-1] == history:
+            unique_continuations.add(x[-1])
+    # print(unique_continuations)
+
+    # lamba term calculation
+    n_term_num = len(unique_continuations)
+    n_term_denom = count_history + n_term_num
+    n_term = n_term_num/n_term_denom
+
+    lambda_term = 1 - n_term 
+    # print("lambda ", lambda_term, sequence)
+    
+    first_term = lambda_term * p_ml
+    # print("first ", first_term, sequence)
+
+    context = sequence[1:]
+    second_term = n_term * witten_bell_smoothing(context, n-1)
+    # print("second ", second_term, sequence)
+    p_wb = first_term + second_term
+    return p_wb
+
+# sequence = ["agar", "mai", "kahoon", "ye"]
+# sequence = clean_text(sequence)
+# sequence = tuple(sequence)
+# print(sequence)
+# prob = witten_bell_smoothing(sequence, 4)
+# print(prob)
+
+def perplexity(text, n, smoothing):
+    perplexity = []
+    no_zeros = 0
+
+    for sentence in text:
+        prob = 1
+        #convert sentence to list of words
+        # print(sentence)
+        sentence = tokeniser(sentence)
+        # Tokenise the sentence
+        sentence = clean_text(sentence)
+        # Create n-grams
+        ngrams = create_ngrams(sentence, 4)
+        # print(ngrams)
+        for ngram in ngrams:
+            if smoothing == "kneser_ney":
+                get_prob = kneser_ney_smoothing(ngram, n)
+                prob *= get_prob
+            elif smoothing == "witten_bell":
+                get_prob = witten_bell_smoothing(ngram, n)
+                # print("get prob ", get_prob)
+                prob *= get_prob
+                # print("prob: ", ngram, prob)'
+        # print("prob ", prob)
+        if prob == 0:
+            prob = 1e-10
+            no_zeros += 1
+        total_prob = math.pow(1/prob, 1/len(sentence))  
+        perplexity.append(total_prob)
+    
+    avg_perplexity = 0
+    for x in perplexity:
+        avg_perplexity += x 
+
+    avg_perplexity = avg_perplexity/len(perplexity)
+    print("Perplexity ", avg_perplexity)
+    print("No of zeros ", no_zeros)
+    return avg_perplexity
